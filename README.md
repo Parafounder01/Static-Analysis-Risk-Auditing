@@ -48,7 +48,7 @@ flowchart TD
     S[📝 your script] --> P{⚡ performance?}
     S --> I{🗂️ plan hazards?}
     S --> G{🏗️ schema drift?}
-    P -->|SELECT *, YEAR(), LOWER(), IN-subquery, OR-chain| R1[🔴 flag it]
+    P -->|"SELECT *, YEAR(), LOWER(), IN-subquery, OR-chain"| R1[🔴 flag it]
     I -->|function on JOIN key, scan patterns| R2[🔴 flag it]
     G -->|no PK/FK, INT money, no lineage cols| R3[🔴 flag it]
     R1 & R2 & R3 --> T[📦 structured report]
