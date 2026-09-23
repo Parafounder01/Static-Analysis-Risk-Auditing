@@ -1,0 +1,68 @@
+### 1. AUDIT SUMMARY (orders_risky.sql)
+- **Total Issues Detected**: 12
+- **Critical Hazards (Production Blockers)**: 4
+- **Performance Warnings**: 7
+- **Schema Drift & Lineage Risks**: 5
+
+### 2. LINE-BY-LINE DEFECT LOG
+
+1. **[CRITICAL]** Performance — line 5
+   - Anti-pattern: `SELECT *`
+   - Root cause: SELECT * pulls unneeded columns: extra I/O, bandwidth, and breaks views/procs on schema drift.
+   - Remediation: List columns explicitly: SELECT order_id, order_date, ...
+
+2. **[WARNING]** Performance — line 7
+   - Anti-pattern: `WHERE YEAR(o.order_date) = 2024`
+   - Root cause: YEAR() on a column defeats index seeks (non-sargable); engine must scan every row.
+   - Remediation: Rewrite as a range predicate, e.g. order_date >= '2024-01-01' AND order_date < '2025-01-01'.
+
+3. **[WARNING]** Performance — line 8
+   - Anti-pattern: `AND o.order_id IN (SELECT order_id FROM dbo.order_items WHERE qty > 10)`
+   - Root cause: IN with a subquery often materializes the full inner set; EXISTS short-circuits and joins use indexes better.
+   - Remediation: Use WHERE EXISTS (...) or an explicit JOIN.
+
+4. **[WARNING]** Index/Plan — line 9
+   - Anti-pattern: `AND (o.status = 'NEW' OR o.status = 'OPEN' OR o.priority = 'HIGH');`
+   - Root cause: Multiple ORs across columns suppress index usage; the optimizer falls back to scans.
+   - Remediation: Split into UNION ALL branches or use IN (...) on one column.
+
+5. **[WARNING]** Performance — line 14
+   - Anti-pattern: `(SELECT COUNT(*) FROM dbo.orders AS o WHERE o.customer_id = c.customer_id) AS order_count`
+   - Root cause: Scalar/correlated subquery executes once per outer row.
+   - Remediation: Convert to a LEFT JOIN against a grouped CTE.
+
+6. **[WARNING]** Performance — line 16
+   - Anti-pattern: `JOIN dbo.orders AS o2 ON LOWER(o2.region) = LOWER(c.region);`
+   - Root cause: LOWER() on a column defeats index seeks (non-sargable); engine must scan every row.
+   - Remediation: Standardize the column upstream (silver layer) and join on raw indexed columns.
+
+7. **[CRITICAL]** Index/Plan — line 16
+   - Anti-pattern: `JOIN dbo.orders AS o2 ON LOWER(o2.region) = LOWER(c.region);`
+   - Root cause: Function on a JOIN key kills seek + merge/hash efficiency; forces row-by-row evaluation.
+   - Remediation: Cleanse/standardize the column upstream (silver layer) and join on raw indexed columns.
+
+8. **[CRITICAL]** Schema Drift — line 19
+   - Anti-pattern: `CREATE TABLE dbo.fact_sales (...)`
+   - Root cause: No primary key: duplicates possible, no clustered order, replication/CDC and joins suffer.
+   - Remediation: Add a surrogate key: order_key INT IDENTITY(1,1) PRIMARY KEY.
+
+9. **[WARNING]** Schema Drift — line 19
+   - Anti-pattern: `CREATE TABLE dbo.fact_sales (...)`
+   - Root cause: No foreign keys: orphan rows possible, optimizer loses join-cardinality information.
+   - Remediation: Add REFERENCES to parent dimensions.
+
+10. **[CRITICAL]** Schema Drift — line 19
+   - Anti-pattern: `amount INT`
+   - Root cause: INT for money risks overflow and cannot store cents; financial metrics need fixed precision.
+   - Remediation: Use DECIMAL(18,2).
+
+11. **[WARNING]** Schema Drift — line 19
+   - Anti-pattern: `note VARCHAR(50)`
+   - Root cause: Short VARCHAR on free-text columns risks silent truncation.
+   - Remediation: Use VARCHAR(MAX) or a sized type matching the source.
+
+12. **[INFO]** Schema Drift — line 19
+   - Anti-pattern: `CREATE TABLE dbo.fact_sales (...)`
+   - Root cause: Missing lineage columns (dwh_create_date, dwh_update_date, source_system): no audit trail for loads and debugging.
+   - Remediation: Add dwh_create_date DATE, dwh_update_date DATE, source_system VARCHAR(50).
+
